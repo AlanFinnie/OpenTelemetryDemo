@@ -1,0 +1,64 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: Cleanup GHCR Images
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode (no deletion)"
+        required: false
+        default: "true"
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608 # v3
+
+      - name: List and clean nightly images
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || github.event.inputs.dry_run || 'true' }}
+        run: |
+          echo "Dry run mode: $DRY_RUN"
+
+          versions=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            /orgs/open-telemetry/packages/container/otel-demo/versions?per_page=100 \
+            --paginate \
+            --jq '.[].id')
+
+          for version in $versions; do
+            tags=$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              /orgs/open-telemetry/packages/container/otel-demo/versions/$version \
+              --jq '.metadata.container.tags[]?')
+
+            for tag in $tags; do
+              if [[ "$tag" == nightly-* ]]; then
+                echo "Found nightly image: $tag (version: $version)"
+
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[DRY RUN] Would delete version ID: $version"
+                else
+                  echo "Deleting version ID: $version"
+                  gh api --method DELETE \
+                    -H "Accept: application/vnd.github+json" \
+                    /orgs/open-telemetry/packages/container/otel-demo/versions/$version
+                fi
+
+                break
+              else
+                echo "Skipping non-nightly tag: $tag"
+              fi
+            done
+          done 
